@@ -23,7 +23,11 @@ import eu.anifantakis.lib.ksafe.KSafeMemoryPolicy
 import eu.anifantakis.lib.ksafe.KSafeSecurityPolicy
 import eu.anifantakis.lib.ksafe.KSafeWriteMode
 import eu.anifantakis.lib.ksafe.SecurityAction
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "benchmark_datastore")
@@ -905,6 +909,14 @@ class BenchmarkRunner(private val context: Context) {
     // ========== KSafe COROUTINE/SUSPEND API READ ==========
 
     // Coroutine API - Unencrypted read
+    //
+    // Fires every iteration as a `GlobalScope.launch` so they all dispatch
+    // immediately on `Dispatchers.Default` (no event-loop interleaving on a
+    // single thread). Then `runBlocking { joinAll() }` waits for every job
+    // before measuring elapsed time. This represents real-app concurrency
+    // (multiple coroutines reading at once) rather than artificial one-at-
+    // a-time awaits.
+    @OptIn(DelicateCoroutinesApi::class)
     private fun benchmarkKSafeCoroutineUnencryptedRead(): BenchmarkResult {
         runBlocking {
             repeat(warmupIterations) {
@@ -913,11 +925,12 @@ class BenchmarkRunner(private val context: Context) {
         }
 
         val start = System.nanoTime()
-        runBlocking {
-            repeat(iterations) {
-                ksafePlainMemory.get("ksafe_coroutine_unencrypted_key_$it", "")
+        val jobs = (0 until iterations).map { i ->
+            GlobalScope.launch {
+                ksafePlainMemory.get("ksafe_coroutine_unencrypted_key_$i", "")
             }
         }
+        runBlocking { jobs.joinAll() }
         val elapsed = System.nanoTime() - start
 
         return BenchmarkResult(
@@ -932,6 +945,7 @@ class BenchmarkRunner(private val context: Context) {
     }
 
     // Coroutine API - Encrypted read with PLAIN_TEXT memory policy
+    @OptIn(DelicateCoroutinesApi::class)
     private fun benchmarkKSafeCoroutineEncryptedPlainMemRead(): BenchmarkResult {
         runBlocking {
             repeat(warmupIterations) {
@@ -940,11 +954,12 @@ class BenchmarkRunner(private val context: Context) {
         }
 
         val start = System.nanoTime()
-        runBlocking {
-            repeat(iterations) {
-                ksafePlainMemory.get("ksafe_coroutine_encrypted_PLAIN_TEXT_key_$it", "")
+        val jobs = (0 until iterations).map { i ->
+            GlobalScope.launch {
+                ksafePlainMemory.get("ksafe_coroutine_encrypted_PLAIN_TEXT_key_$i", "")
             }
         }
+        runBlocking { jobs.joinAll() }
         val elapsed = System.nanoTime() - start
 
         return BenchmarkResult(
@@ -959,6 +974,7 @@ class BenchmarkRunner(private val context: Context) {
     }
 
     // Coroutine API - Encrypted read with ENCRYPTED memory policy
+    @OptIn(DelicateCoroutinesApi::class)
     private fun benchmarkKSafeCoroutineEncryptedEncMemRead(): BenchmarkResult {
         runBlocking {
             repeat(warmupIterations) {
@@ -967,11 +983,12 @@ class BenchmarkRunner(private val context: Context) {
         }
 
         val start = System.nanoTime()
-        runBlocking {
-            repeat(iterations) {
-                ksafeEncryptedMemory.get("ksafe_coroutine_encrypted_ENCRYPTED_key_$it", "")
+        val jobs = (0 until iterations).map { i ->
+            GlobalScope.launch {
+                ksafeEncryptedMemory.get("ksafe_coroutine_encrypted_ENCRYPTED_key_$i", "")
             }
         }
+        runBlocking { jobs.joinAll() }
         val elapsed = System.nanoTime() - start
 
         return BenchmarkResult(
@@ -1243,22 +1260,25 @@ class BenchmarkRunner(private val context: Context) {
     // ========== KSafe COROUTINE/SUSPEND API WRITE ==========
 
     // Coroutine API - Unencrypted
-    // Uses concurrent writes to benefit from write coalescing/batching
+    // Fires every iteration as a `GlobalScope.launch` (dispatched immediately on
+    // Dispatchers.Default) and waits for completion via `joinAll`. This represents
+    // real-app concurrency where multiple coroutines call put() in parallel and
+    // the write coalescer batches them.
+    @OptIn(DelicateCoroutinesApi::class)
     private fun benchmarkKSafeCoroutineUnencrypted(): BenchmarkResult {
-        // Warmup (outside timed section)
         runBlocking {
             repeat(warmupIterations) {
                 ksafePlainMemory.put("_warmup", "warmup", KSafeWriteMode.Plain)
             }
         }
 
-        // Timed section
         val start = System.nanoTime()
-        runBlocking {
-            repeat(iterations) { i ->
+        val jobs = (0 until iterations).map { i ->
+            GlobalScope.launch {
                 ksafePlainMemory.put("ksafe_coroutine_unencrypted_key_$i", "value_$i", KSafeWriteMode.Plain)
             }
         }
+        runBlocking { jobs.joinAll() }
         val elapsed = System.nanoTime() - start
 
         return BenchmarkResult(
@@ -1273,21 +1293,21 @@ class BenchmarkRunner(private val context: Context) {
     }
 
     // Coroutine API - Encrypted with PLAIN_TEXT memory policy
+    @OptIn(DelicateCoroutinesApi::class)
     private fun benchmarkKSafeCoroutineEncryptedPlainMem(): BenchmarkResult {
-        // Warmup (outside timed section)
         runBlocking {
             repeat(warmupIterations) {
                 ksafePlainMemory.put("_warmup", "warmup", KSafeWriteMode.Encrypted())
             }
         }
 
-        // Timed section
         val start = System.nanoTime()
-        runBlocking {
-            repeat(iterations) { i ->
+        val jobs = (0 until iterations).map { i ->
+            GlobalScope.launch {
                 ksafePlainMemory.put("ksafe_coroutine_encrypted_PLAIN_TEXT_key_$i", "value_$i", KSafeWriteMode.Encrypted())
             }
         }
+        runBlocking { jobs.joinAll() }
         val elapsed = System.nanoTime() - start
 
         return BenchmarkResult(
@@ -1302,21 +1322,21 @@ class BenchmarkRunner(private val context: Context) {
     }
 
     // Coroutine API - Encrypted with ENCRYPTED memory policy
+    @OptIn(DelicateCoroutinesApi::class)
     private fun benchmarkKSafeCoroutineEncryptedEncMem(): BenchmarkResult {
-        // Warmup (outside timed section)
         runBlocking {
             repeat(warmupIterations) {
                 ksafeEncryptedMemory.put("_warmup", "warmup", KSafeWriteMode.Encrypted())
             }
         }
 
-        // Timed section
         val start = System.nanoTime()
-        runBlocking {
-            repeat(iterations) { i ->
+        val jobs = (0 until iterations).map { i ->
+            GlobalScope.launch {
                 ksafeEncryptedMemory.put("ksafe_coroutine_encrypted_ENCRYPTED_key_$i", "value_$i", KSafeWriteMode.Encrypted())
             }
         }
+        runBlocking { jobs.joinAll() }
         val elapsed = System.nanoTime() - start
 
         return BenchmarkResult(
